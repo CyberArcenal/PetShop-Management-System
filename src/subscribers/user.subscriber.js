@@ -30,6 +30,7 @@ class UserSubscriber {
 
     const oldUser = event.databaseEntity;
     const newUser = event.entity;
+    const user = event.user
 
     if (!oldUser) {
       logger.warn('[UserSubscriber] afterUpdate: oldUser is missing', { id: newUser.id });

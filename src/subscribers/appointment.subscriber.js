@@ -35,6 +35,7 @@ class AppointmentSubscriber {
 
     const oldAppointment = event.databaseEntity;
     const newAppointment = event.entity;
+    const user = event.user
 
     logger.info('[AppointmentSubscriber] afterUpdate', {
       id: newAppointment.id,

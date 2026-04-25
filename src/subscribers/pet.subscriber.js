@@ -1,4 +1,3 @@
-//@ts-check
 
 const { logger } = require("../common/utils/logger");
 const { PetStateTransition } = require("../stateTransitionServices/pet.state");
@@ -12,15 +11,24 @@ class PetSubscriber {
     return 'Pet'; // must match the entity name used in EntitySchema
   }
 
+  /**
+   * @param {{ id: any; }} entity
+   */
   async beforeInsert(entity) {
     logger.debug('[PetSubscriber] beforeInsert', { id: entity.id });
   }
 
+  /**
+   * @param {Object} entity
+   */
   async afterInsert(entity) {
     logger.info('[PetSubscriber] afterInsert', { id: entity.id, name: entity.name });
     await this.stateTransition.onCreated(entity);
   }
 
+  /**
+   * @param {any} entity
+   */
   async beforeUpdate(entity) {
     // optional
   }
@@ -31,6 +39,7 @@ class PetSubscriber {
 
     const oldPet = event.databaseEntity;
     const newPet = event.entity;
+    const user = event.user
 
     if (!oldPet) return;
 
@@ -53,10 +62,16 @@ class PetSubscriber {
     }
   }
 
+  /**
+   * @param {{ id: any; }} entity
+   */
   async beforeRemove(entity) {
     logger.info('[PetSubscriber] beforeRemove (hard delete)', { id: entity.id });
   }
 
+  /**
+   * @param {{ entityId: any; }} event
+   */
   async afterRemove(event) {
     logger.info('[PetSubscriber] afterRemove (hard delete)', { id: event.entityId });
   }

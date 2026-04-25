@@ -1,11 +1,9 @@
-// src/services/NotificationLogEntity.service.js
-// @ts-check
-
+// src/modules/notifications/services/notificationLog.service.js
 const emailSender = require('../../../channels/email.sender');
 const { logger } = require('../../../common/utils/logger');
 const { AppDataSource } = require('../../../db/datasource');
 const { NotificationLogEntity } = require('../entities/notificationLog.entity');
-
+const auditLogger = require('../../../common/utils/auditLogger');
 
 const LOG_STATUS = {
   QUEUED: "queued",
@@ -14,57 +12,25 @@ const LOG_STATUS = {
   RESEND: "resend",
 };
 
-/**
- * Allowed columns for sorting (prevents SQL injection)
- */
 const ALLOWED_SORT_COLUMNS = new Set([
-  "id",
-  "recipient_email",
-  "subject",
-  "status",
-  "retry_count",
-  "resend_count",
-  "sent_at",
-  "last_error_at",
-  "created_at",
-  "updated_at",
+  "id", "recipient_email", "subject", "status", "retry_count",
+  "resend_count", "sent_at", "last_error_at", "created_at", "updated_at",
 ]);
 
-/**
- * Service for managing notification logs.
- * Supports dependency injection for repository, emailSender, and logger.
- */
 class NotificationLogEntityService {
-  /**
-   * @param {Object} deps - Dependencies
-   * @param {typeof emailSender} [deps.emailSender] - Email sender
-   * @param {typeof logger} [deps.logger] - Logger instance
-   */
   constructor(deps = {}) {
-    
     this.repository = deps.repository || AppDataSource.getRepository(NotificationLogEntity);
     this.emailSender = deps.emailSender || emailSender;
     this.logger = deps.logger || logger;
   }
 
-  /**
-   * Get repository – optionally use queryRunner for transactions
-   * @param {import('typeorm').QueryRunner} [queryRunner]
-   * @returns {import('typeorm').Repository<NotificationLogEntity>}
-   */
   getRepository(queryRunner) {
     if (queryRunner?.manager) {
-      
       return queryRunner.manager.getRepository(NotificationLogEntity);
     }
     return this.repository;
   }
 
-  /**
-   * Central error handler – logs and returns a consistent error response
-   * @private
-   */
-  
   _handleError(error, context = "") {
     this.logger.error(`NotificationLogEntityService${context ? ` [${context}]` : ""}:`, error);
     return {
@@ -74,46 +40,22 @@ class NotificationLogEntityService {
     };
   }
 
-  //#region 📋 READ OPERATIONS
-
-  /**
-   * Get all notifications with filtering, sorting, and pagination.
-   * @param {Object} params
-   * @param {number} [params.page=1]
-   * @param {number} [params.limit=50]
-   * @param {string} [params.status]
-   * @param {Date|string} [params.startDate]
-   * @param {Date|string} [params.endDate]
-   * @param {string} [params.sortBy='created_at']
-   * @param {'ASC'|'DESC'} [params.sortOrder='DESC']
-   * @param {import('typeorm').QueryRunner} [queryRunner]
-   */
+  // READ OPERATIONS (no user needed, but can add user for audit if required)
   async getAllNotifications(
-    {
-      page = 1,
-      limit = 50,
-      status,
-      startDate,
-      endDate,
-      sortBy = "created_at",
-      sortOrder = "DESC",
-    },
+    { page = 1, limit = 50, status, startDate, endDate, sortBy = "created_at", sortOrder = "DESC" },
     queryRunner,
   ) {
     try {
       const repo = this.getRepository(queryRunner);
       const qb = repo.createQueryBuilder("log");
 
-      // Filters
       if (status) qb.andWhere("log.status = :status", { status });
       if (startDate) qb.andWhere("log.created_at >= :startDate", { startDate });
       if (endDate) qb.andWhere("log.created_at <= :endDate", { endDate });
 
-      // Sorting – only allow safe columns
       const safeSortBy = ALLOWED_SORT_COLUMNS.has(sortBy) ? sortBy : "created_at";
       qb.orderBy(`log.${safeSortBy}`, sortOrder === "DESC" ? "DESC" : "ASC");
 
-      // Pagination
       qb.skip((page - 1) * limit).take(limit);
 
       const [data, total] = await qb.getManyAndCount();
@@ -133,54 +75,28 @@ class NotificationLogEntityService {
     }
   }
 
-  /**
-   * Get a single notification by ID.
-   * @param {Object} params
-   * @param {number} params.id
-   * @param {import('typeorm').QueryRunner} [queryRunner]
-   */
   async getNotificationById({ id }, queryRunner) {
     try {
       if (!id) return { status: false, message: "ID is required", data: null };
-
       const repo = this.getRepository(queryRunner);
-      
       const notification = await repo.findOne({ where: { id } });
-
-      if (!notification) {
-        return { status: false, message: "Notification not found", data: null };
-      }
-
+      if (!notification) return { status: false, message: "Notification not found", data: null };
       return { status: true, data: notification };
     } catch (error) {
       return this._handleError(error, "getNotificationById");
     }
   }
 
-  /**
-   * Get notifications by recipient email with pagination.
-   * @param {Object} params
-   * @param {string} params.recipient_email
-   * @param {number} [params.page=1]
-   * @param {number} [params.limit=50]
-   * @param {import('typeorm').QueryRunner} [queryRunner]
-   */
   async getNotificationsByRecipient({ recipient_email, page = 1, limit = 50 }, queryRunner) {
     try {
-      if (!recipient_email) {
-        return { status: false, message: "Recipient email is required", data: null };
-      }
-
+      if (!recipient_email) return { status: false, message: "Recipient email is required", data: null };
       const repo = this.getRepository(queryRunner);
       const [data, total] = await repo.findAndCount({
-        
         where: { recipient_email },
-        
         order: { created_at: "DESC" },
         skip: (page - 1) * limit,
         take: limit,
       });
-
       return {
         status: true,
         data,
@@ -191,20 +107,9 @@ class NotificationLogEntityService {
     }
   }
 
-  /**
-   * Search notifications by keyword (recipient, subject, payload).
-   * @param {Object} params
-   * @param {string} params.keyword
-   * @param {number} [params.page=1]
-   * @param {number} [params.limit=50]
-   * @param {import('typeorm').QueryRunner} [queryRunner]
-   */
   async searchNotifications({ keyword, page = 1, limit = 50 }, queryRunner) {
     try {
-      if (!keyword) {
-        return { status: false, message: "Keyword is required", data: null };
-      }
-
+      if (!keyword) return { status: false, message: "Keyword is required", data: null };
       const repo = this.getRepository(queryRunner);
       const qb = repo
         .createQueryBuilder("log")
@@ -214,9 +119,7 @@ class NotificationLogEntityService {
         .orderBy("log.created_at", "DESC")
         .skip((page - 1) * limit)
         .take(limit);
-
       const [data, total] = await qb.getManyAndCount();
-
       return {
         status: true,
         data,
@@ -227,320 +130,127 @@ class NotificationLogEntityService {
     }
   }
 
-  //#endregion
-
-  //#region ✏️ WRITE OPERATIONS
-
-  /**
-   * Delete a notification by ID.
-   * @param {Object} params
-   * @param {number} params.id
-   * @param {import('typeorm').QueryRunner} [queryRunner]
-   */
-  async deleteNotification({ id }, queryRunner) {
+  // WRITE OPERATIONS with user and queryRunner
+  async deleteNotification({ id }, user, queryRunner) {
     try {
       if (!id) return { status: false, message: "ID is required", data: null };
-
       const repo = this.getRepository(queryRunner);
-      
       const notification = await repo.findOne({ where: { id } });
-
-      if (!notification) {
-        return { status: false, message: "Notification not found", data: null };
-      }
-
+      if (!notification) return { status: false, message: "Notification not found", data: null };
       await repo.remove(notification);
-      return { status: true, message: "Notification deleted successfully" };
+      await auditLogger.logDelete("NotificationLog", id, notification, user.id);
+      return { status: true, message: "Notification log deleted successfully" };
     } catch (error) {
       return this._handleError(error, "deleteNotification");
     }
   }
 
-  /**
-   * Update the status of a notification and set timestamps accordingly.
-   * @param {Object} params
-   * @param {number} params.id
-   * @param {string} params.status
-   * @param {string|null} [params.errorMessage=null]
-   * @param {import('typeorm').QueryRunner} [queryRunner]
-   */
-  async updateNotificationStatus({ id, status, errorMessage = null }, queryRunner) {
+  async updateNotificationStatus({ id, status, errorMessage = null }, user, queryRunner) {
     try {
-      if (!id || !status) {
-        return { status: false, message: "ID and status are required", data: null };
-      }
-
+      if (!id || !status) return { status: false, message: "ID and status are required", data: null };
       const repo = this.getRepository(queryRunner);
-      
       const notification = await repo.findOne({ where: { id } });
-
-      if (!notification) {
-        return { status: false, message: "Notification not found", data: null };
-      }
-
-      
+      if (!notification) return { status: false, message: "Notification not found", data: null };
+      const oldData = { ...notification };
       notification.status = status;
-      
       notification.error_message = errorMessage;
-
-      if (status === LOG_STATUS.SENT) {
-        
-        notification.sent_at = new Date();
-      } else if (status === LOG_STATUS.FAILED) {
-        
-        notification.last_error_at = new Date();
-      }
-
-      
+      if (status === LOG_STATUS.SENT) notification.sent_at = new Date();
+      else if (status === LOG_STATUS.FAILED) notification.last_error_at = new Date();
       notification.updated_at = new Date();
-
       const saved = await repo.save(notification);
+      await auditLogger.logUpdate("NotificationLog", id, oldData, saved, user.id);
       return { status: true, data: saved };
     } catch (error) {
       return this._handleError(error, "updateNotificationStatus");
     }
   }
 
-  //#endregion
-
-  //#region 🔄 RETRY / RESEND OPERATIONS
-
-  /**
-   * Internal method to send email and update the notification object (without saving).
-   * @private
-   * @param {NotificationLogEntity} notification
-   * @param {boolean} [isResend=false]
-   * @returns {Promise<{ success: boolean, error?: string }>}
-   */
+  // RETRY / RESEND operations
   async _sendAndUpdate(notification, isResend = false) {
     const sendResult = await this.emailSender.send(
-      
       notification.recipient_email,
-      
       notification.subject || "No Subject",
-      
       notification.payload || "",
-      
       null,
       {},
       false,
     );
-
     if (sendResult?.success) {
-      
       notification.status = isResend ? LOG_STATUS.RESEND : LOG_STATUS.SENT;
-      
       notification.sent_at = new Date();
-      
       notification.error_message = null;
-      
       notification.last_error_at = null;
     } else {
-      
       notification.status = LOG_STATUS.FAILED;
-      
       notification.last_error_at = new Date();
-      
       notification.error_message = sendResult?.error || "Unknown error";
     }
-
     if (isResend) {
-      
       notification.resend_count = (notification.resend_count || 0) + 1;
     } else {
-      
       notification.retry_count = (notification.retry_count || 0) + 1;
     }
-
-    
     notification.updated_at = new Date();
     return sendResult;
   }
 
-  /**
-   * Retry a failed or queued notification.
-   * @param {Object} params
-   * @param {number} params.id
-   * @param {import('typeorm').QueryRunner} [queryRunner]
-   */
-  async retryFailedNotification({ id }, queryRunner) {
+  async retryFailedNotification({ id }, user, queryRunner) {
     try {
-      if (!id) {
-        return { status: false, message: "Notification ID is required", data: null };
-      }
-
+      if (!id) return { status: false, message: "Notification ID is required", data: null };
       const repo = this.getRepository(queryRunner);
-      
       const notification = await repo.findOne({ where: { id } });
-
-      if (!notification) {
-        return { status: false, message: "Notification not found", data: null };
-      }
-
-      
+      if (!notification) return { status: false, message: "Notification not found", data: null };
       if (![LOG_STATUS.FAILED, LOG_STATUS.QUEUED].includes(notification.status)) {
-        return {
-          status: false,
-          
-          message: `Cannot retry notification with status: ${notification.status}`,
-          data: null,
-        };
+        return { status: false, message: `Cannot retry notification with status: ${notification.status}`, data: null };
       }
-
-      // Send and update object (in-memory)
       const sendResult = await this._sendAndUpdate(notification, false);
-
-      // Save changes
       const saved = await repo.save(notification);
-
-      return {
-        status: true,
-        data: saved,
-        sendResult,
-      };
+      await auditLogger.logUpdate("NotificationLog", id, null, saved, user.id);
+      return { status: true, data: saved, sendResult };
     } catch (error) {
       return this._handleError(error, "retryFailedNotification");
     }
   }
 
-  /**
-   * Retry all failed/queued notifications, optionally filtered.
-   * @param {Object} params
-   * @param {Object} [params.filters={}]
-   * @param {string} [params.filters.recipient_email]
-   * @param {Date|string} [params.filters.createdBefore]
-   * @param {import('typeorm').QueryRunner} [queryRunner]
-   */
-  async retryAllFailed({ filters = {} }, queryRunner) {
+  async resendNotification({ id }, user, queryRunner) {
     try {
+      if (!id) return { status: false, message: "Notification ID is required", data: null };
       const repo = this.getRepository(queryRunner);
-      const qb = repo
-        .createQueryBuilder("log")
-        .where("log.status IN (:...statuses)", {
-          statuses: [LOG_STATUS.FAILED, LOG_STATUS.QUEUED],
-        });
-
-      if (filters.recipient_email) {
-        qb.andWhere("log.recipient_email = :recipient", {
-          recipient: filters.recipient_email,
-        });
-      }
-
-      if (filters.createdBefore) {
-        qb.andWhere("log.created_at <= :before", {
-          before: filters.createdBefore,
-        });
-      }
-
-      const failedNotifications = await qb.getMany();
-
-      // Process sequentially to avoid overwhelming the email sender
-      const results = [];
-      for (const notification of failedNotifications) {
-        const sendResult = await this._sendAndUpdate(notification, false);
-        
-        const saved = await repo.save(notification);
-        results.push({
-          
-          id: notification.id,
-          success: sendResult?.success,
-          error: sendResult?.error,
-        });
-      }
-
-      const successCount = results.filter((r) => r.success).length;
-      const failCount = results.length - successCount;
-
-      return {
-        status: true,
-        message: `Retried ${results.length} notifications. ${successCount} succeeded, ${failCount} failed.`,
-        data: results,
-      };
-    } catch (error) {
-      return this._handleError(error, "retryAllFailed");
-    }
-  }
-
-  /**
-   * Resend a notification (manual resend, regardless of previous status).
-   * @param {Object} params
-   * @param {number} params.id
-   * @param {import('typeorm').QueryRunner} [queryRunner]
-   */
-  async resendNotification({ id }, queryRunner) {
-    try {
-      if (!id) {
-        return { status: false, message: "Notification ID is required", data: null };
-      }
-
-      const repo = this.getRepository(queryRunner);
-      
       const notification = await repo.findOne({ where: { id } });
-
-      if (!notification) {
-        return { status: false, message: "Notification not found", data: null };
-      }
-
+      if (!notification) return { status: false, message: "Notification not found", data: null };
       const sendResult = await this._sendAndUpdate(notification, true);
       const saved = await repo.save(notification);
-
-      return {
-        status: true,
-        data: saved,
-        sendResult,
-      };
+      await auditLogger.logUpdate("NotificationLog", id, null, saved, user.id);
+      return { status: true, data: saved, sendResult };
     } catch (error) {
       return this._handleError(error, "resendNotification");
     }
   }
 
-  //#endregion
-
-  //#region 📊 STATISTICS
-
-  /**
-   * Get notification statistics.
-   * @param {Object} params
-   * @param {Date|string} [params.startDate]
-   * @param {Date|string} [params.endDate]
-   * @param {import('typeorm').QueryRunner} [queryRunner]
-   */
+  // STATISTICS
   async getNotificationStats({ startDate, endDate }, queryRunner) {
     try {
       const repo = this.getRepository(queryRunner);
       const qb = repo.createQueryBuilder("log");
-
       if (startDate) qb.andWhere("log.created_at >= :startDate", { startDate });
       if (endDate) qb.andWhere("log.created_at <= :endDate", { endDate });
-
-      // Status counts
-      const statusStats = await qb
-        .clone()
+      const statusStats = await qb.clone()
         .select("log.status", "status")
         .addSelect("COUNT(log.id)", "count")
         .groupBy("log.status")
         .getRawMany();
-
       const total = await qb.clone().getCount();
-
-      const avgRetry = await qb
-        .clone()
+      const avgRetry = await qb.clone()
         .where("log.status = :status", { status: LOG_STATUS.FAILED })
         .select("AVG(log.retry_count)", "avg")
         .getRawOne();
-
-      const last24h = await qb
-        .clone()
-        .where("log.created_at >= :date", {
-          date: new Date(Date.now() - 24 * 60 * 60 * 1000),
-        })
+      const last24h = await qb.clone()
+        .where("log.created_at >= :date", { date: new Date(Date.now() - 24 * 60 * 60 * 1000) })
         .getCount();
-
       const byStatus = statusStats.reduce((acc, { status, count }) => {
         acc[status] = parseInt(count, 10);
         return acc;
       }, {});
-
       return {
         status: true,
         data: {
@@ -555,24 +265,10 @@ class NotificationLogEntityService {
     }
   }
 
-  //#endregion
-
-  //#region 🧩 CREATE (used by email/sms sender)
-
-  /**
-   * Create a new notification log (usually queued).
-   * @param {Object} data
-   * @param {string} data.to
-   * @param {string} data.subject
-   * @param {string} [data.html]
-   * @param {string} [data.text]
-   * @param {import('typeorm').QueryRunner} [queryRunner]
-   */
-  async createLog(data, queryRunner) {
+  async createLog(data, user, queryRunner) {
     try {
       const repo = this.getRepository(queryRunner);
       const log = repo.create({
-        
         recipient_email: data.to,
         subject: data.subject,
         payload: data.html || data.text,
@@ -580,15 +276,13 @@ class NotificationLogEntityService {
         retry_count: 0,
         resend_count: 0,
       });
-
       const saved = await repo.save(log);
+      await auditLogger.logCreate("NotificationLog", saved.id, saved, user?.id || "system");
       return { status: true, data: saved };
     } catch (error) {
       return this._handleError(error, "createLog");
     }
   }
-
-  //#endregion
 }
 
 module.exports = { NotificationLogEntityService, LOG_STATUS };

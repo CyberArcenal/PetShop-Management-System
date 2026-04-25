@@ -1,5 +1,5 @@
-//@ts-check
-const { AppDataSource } = require('../../../db/datasource');
+
+const { AppDataSource } = require("../../../db/datasource");
 
 class ProductService {
   constructor() {
@@ -8,9 +8,9 @@ class ProductService {
 
   async initialize() {
     if (this.productRepo) return;
-    const { ProductEntity } = require('../entities/product.entity');
+    const { ProductEntity } = require("../entities/product.entity");
     this.productRepo = AppDataSource.getRepository(ProductEntity);
-    console.log('ProductService initialized');
+    console.log("ProductService initialized");
   }
 
   async getRepositories() {
@@ -18,24 +18,68 @@ class ProductService {
     return { product: this.productRepo };
   }
 
+  async _getRepository(queryRunner = null) {
+    if (queryRunner) {
+      const { ProductEntity } = require("../entities/product.entity");
+      return queryRunner.manager.getRepository(ProductEntity);
+    }
+    return (await this.getRepositories()).product;
+  }
+
+  async _save(repo, entity, queryRunner = null, currentUser = null) {
+    const { saveDb } = require("../../../common/utils/dbUtils/dbActions");
+    if (queryRunner) {
+      return await saveDb(queryRunner.manager, entity, { user: currentUser });
+      // return await queryRunner.manager.save(entity);
+    }
+    return await saveDb(repo, entity, { user: currentUser });
+  }
+
+  async _update(repo, entity, queryRunner = null, currentUser = null) {
+    const { updateDb } = require("../../../common/utils/dbUtils/dbActions");
+    if (queryRunner) {
+      return await updateDb(queryRunner.manager, entity, { user: currentUser });
+      // return await queryRunner.manager.save(entity);
+    }
+    return await updateDb(repo, entity, { user: currentUser });
+  }
+
+  async _remove(repo, entity, queryRunner = null, currentUser = null) {
+    const { removeDb } = require("../../../common/utils/dbUtils/dbActions");
+    if (queryRunner) {
+      return await removeDb(queryRunner.manager, entity, { user: currentUser });
+      // return await queryRunner.manager.remove(entity);
+    }
+
+    return await removeDb(repo, entity, { user: currentUser });
+  }
+
   // ------------------------------------------------------------------
   // Stock helpers
   // ------------------------------------------------------------------
 
-  async _adjustStock(id, delta, user = 'system') {
-    const { updateDb } = require('../../../common/utils/dbUtils/dbActions');
-    const auditLogger = require('../../../common/utils/auditLogger');
-    const { product: repo } = await this.getRepositories();
+  async _adjustStock(id, delta, user, queryRunner = null) {
+    const auditLogger = require("../../../common/utils/auditLogger");
+    const repo = await this._getRepository(queryRunner);
 
     const product = await repo.findOne({ where: { id, is_deleted: false } });
     if (!product) throw new Error(`Product with ID ${id} not found`);
     const oldStock = product.stock;
     const newStock = oldStock + delta;
-    if (newStock < 0) throw new Error(`Insufficient stock. Current: ${oldStock}, adjustment: ${delta}`);
+    if (newStock < 0)
+      throw new Error(
+        `Insufficient stock. Current: ${oldStock}, adjustment: ${delta}`
+      );
     product.stock = newStock;
     product.updated_at = new Date();
-    const updated = await updateDb(repo, product);
-    await auditLogger.logUpdate('Product', id, { stock: oldStock }, { stock: newStock }, user);
+    const updated = await this._update(repo, product, queryRunner, user);
+    await auditLogger.logUpdate(
+      "Product",
+      id,
+      { stock: oldStock },
+      { stock: newStock },
+      user.id
+    );
     return updated;
   }
 
@@ -46,96 +90,82 @@ class ProductService {
   /**
    * Create a new product
    * @param {Object} data
-   * @param {string} user
+   * @param {Object} user - { id, ... } from JWT
+   * @param {Object} queryRunner - optional transaction runner
    */
-  async create(data, user = 'system') {
-    const { saveDb } = require('../../../common/utils/dbUtils/dbActions');
-    const auditLogger = require('../../../common/utils/auditLogger');
-    const { product: repo } = await this.getRepositories();
+  async create(data, user, queryRunner = null) {
+    const auditLogger = require("../../../common/utils/auditLogger");
+    const repo = await this._getRepository(queryRunner);
 
-    try {
-      if (!data.name) throw new Error('Product name is required');
-      if (data.price === undefined) throw new Error('Price is required');
+    if (!data.name) throw new Error("Product name is required");
+    if (data.price === undefined) throw new Error("Price is required");
 
-      const product = repo.create({
-        name: data.name,
-        category: data.category || null,
-        price: data.price,
-        stock: data.stock !== undefined ? data.stock : 0,
-        reorder_level: data.reorderLevel !== undefined ? data.reorderLevel : 5,
-        description: data.description || null,
-        is_active: data.isActive !== undefined ? data.isActive : true,
-      });
+    const product = repo.create({
+      name: data.name,
+      category: data.category || null,
+      price: data.price,
+      stock: data.stock !== undefined ? data.stock : 0,
+      reorder_level: data.reorderLevel !== undefined ? data.reorderLevel : 5,
+      description: data.description || null,
+      is_active: data.isActive !== undefined ? data.isActive : true,
+    });
 
-      const saved = await saveDb(repo, product);
-      await auditLogger.logCreate('Product', saved.id, saved, user);
-      return saved;
-    } catch (error) {
-      console.error('Failed to create product:', error.message);
-      throw error;
-    }
+    const saved = await this._save(repo, product, queryRunner, user);
+    await auditLogger.logCreate("Product", saved.id, saved, user.id);
+    return saved;
   }
 
   /**
    * Update a product
    * @param {number} id
    * @param {Object} data
-   * @param {string} user
+   * @param {Object} user
+   * @param {Object} queryRunner
    */
-  async update(id, data, user = 'system') {
-    const { updateDb } = require('../../../common/utils/dbUtils/dbActions');
-    const auditLogger = require('../../../common/utils/auditLogger');
-    const { product: repo } = await this.getRepositories();
+  async update(id, data, user, queryRunner = null) {
+    const auditLogger = require("../../../common/utils/auditLogger");
+    const repo = await this._getRepository(queryRunner);
 
-    try {
-      const existing = await repo.findOne({ where: { id, is_deleted: false } });
-      if (!existing) throw new Error(`Product with ID ${id} not found`);
-      const oldData = { ...existing };
+    const existing = await repo.findOne({ where: { id, is_deleted: false } });
+    if (!existing) throw new Error(`Product with ID ${id} not found`);
+    const oldData = { ...existing };
 
-      // Apply updates
-      if (data.name !== undefined) existing.name = data.name;
-      if (data.category !== undefined) existing.category = data.category;
-      if (data.price !== undefined) existing.price = data.price;
-      if (data.stock !== undefined) existing.stock = data.stock;
-      if (data.reorderLevel !== undefined) existing.reorder_level = data.reorderLevel;
-      if (data.description !== undefined) existing.description = data.description;
-      if (data.isActive !== undefined) existing.is_active = data.isActive;
+    if (data.name !== undefined) existing.name = data.name;
+    if (data.category !== undefined) existing.category = data.category;
+    if (data.price !== undefined) existing.price = data.price;
+    if (data.stock !== undefined) existing.stock = data.stock;
+    if (data.reorderLevel !== undefined)
+      existing.reorder_level = data.reorderLevel;
+    if (data.description !== undefined) existing.description = data.description;
+    if (data.isActive !== undefined) existing.is_active = data.isActive;
 
-      const updated = await updateDb(repo, existing);
-      await auditLogger.logUpdate('Product', id, oldData, updated, user);
-      return updated;
-    } catch (error) {
-      console.error('Failed to update product:', error.message);
-      throw error;
-    }
+    const updated = await this._update(repo, existing, queryRunner, user);
+    await auditLogger.logUpdate("Product", id, oldData, updated, user.id);
+    return updated;
   }
 
   /**
    * Soft delete a product
    * @param {number} id
-   * @param {string} user
+   * @param {Object} user
+   * @param {Object} queryRunner
    */
-  async delete(id, user = 'system') {
-    const { updateDb } = require('../../../common/utils/dbUtils/dbActions');
-    const auditLogger = require('../../../common/utils/auditLogger');
-    const { product: repo } = await this.getRepositories();
+  async delete(id, user, queryRunner = null) {
+    const auditLogger = require("../../../common/utils/auditLogger");
+    const repo = await this._getRepository(queryRunner);
 
-    try {
-      const product = await repo.findOne({ where: { id, is_deleted: false } });
-      if (!product) throw new Error(`Product with ID ${id} not found`);
-      if (product.is_deleted) throw new Error(`Product #${id} is already deleted`);
+    const product = await repo.findOne({ where: { id, is_deleted: false } });
+    if (!product) throw new Error(`Product with ID ${id} not found`);
+    if (product.is_deleted)
+      throw new Error(`Product #${id} is already deleted`);
 
-      const oldData = { ...product };
-      product.is_deleted = true;
-      product.updated_at = new Date();
+    const oldData = { ...product };
+    product.is_deleted = true;
+    product.updated_at = new Date();
 
-      const updated = await updateDb(repo, product);
-      await auditLogger.logDelete('Product', id, oldData, user);
-      return updated;
-    } catch (error) {
-      console.error('Failed to delete product:', error.message);
-      throw error;
-    }
+    const updated = await this._update(repo, product, queryRunner, user);
+    await auditLogger.logDelete("Product", id, oldData, user.id);
+    return updated;
   }
 
   /**
@@ -143,7 +173,7 @@ class ProductService {
    * @param {number} id
    */
   async findById(id) {
-    const { product: repo } = await this.getRepositories();
+    const repo = await this._getRepository();
     const product = await repo.findOne({ where: { id, is_deleted: false } });
     if (!product) throw new Error(`Product with ID ${id} not found`);
     return product;
@@ -152,98 +182,86 @@ class ProductService {
   /**
    * Find all products with filtering, search, pagination, sorting
    * @param {Object} options
-   * @param {number} [options.page]
-   * @param {number} [options.limit]
+   * @param {number} [options.page=1]
+   * @param {number} [options.limit=10]
    * @param {string} [options.category]
    * @param {boolean} [options.isActive]
-   * @param {string} [options.search] - search by name
+   * @param {string} [options.search]
    * @param {number} [options.minPrice]
    * @param {number} [options.maxPrice]
-   * @param {boolean} [options.lowStockOnly] - only products where stock <= reorder_level
+   * @param {boolean} [options.lowStockOnly]
    * @param {string} [options.sortBy]
    * @param {string} [options.sortOrder]
    */
   async findAll(options = {}) {
-    const { product: repo } = await this.getRepositories();
+    const repo = await this._getRepository();
+    const {
+      page = 1,
+      limit = 10,
+      category,
+      isActive,
+      search,
+      minPrice,
+      maxPrice,
+      lowStockOnly,
+      sortBy = "created_at",
+      sortOrder = "DESC",
+    } = options;
 
-    const qb = repo.createQueryBuilder('product').where('product.is_deleted = false');
+    const qb = repo
+      .createQueryBuilder("product")
+      .where("product.is_deleted = false");
 
-    if (options.category) {
-      qb.andWhere('product.category = :category', { category: options.category });
-    }
-    if (options.isActive !== undefined) {
-      qb.andWhere('product.is_active = :isActive', { isActive: options.isActive });
-    }
-    if (options.search) {
-      qb.andWhere('product.name LIKE :search', { search: `%${options.search}%` });
-    }
-    if (options.minPrice !== undefined) {
-      qb.andWhere('product.price >= :minPrice', { minPrice: options.minPrice });
-    }
-    if (options.maxPrice !== undefined) {
-      qb.andWhere('product.price <= :maxPrice', { maxPrice: options.maxPrice });
-    }
-    if (options.lowStockOnly) {
-      qb.andWhere('product.stock <= product.reorder_level');
-    }
+    if (category) qb.andWhere("product.category = :category", { category });
+    if (isActive !== undefined)
+      qb.andWhere("product.is_active = :isActive", { isActive });
+    if (search)
+      qb.andWhere("product.name LIKE :search", { search: `%${search}%` });
+    if (minPrice !== undefined)
+      qb.andWhere("product.price >= :minPrice", { minPrice });
+    if (maxPrice !== undefined)
+      qb.andWhere("product.price <= :maxPrice", { maxPrice });
+    if (lowStockOnly) qb.andWhere("product.stock <= product.reorder_level");
 
-    const sortBy = options.sortBy || 'created_at';
-    const sortOrder = options.sortOrder === 'ASC' ? 'ASC' : 'DESC';
-    qb.orderBy(`product.${sortBy}`, sortOrder);
+    const order = sortOrder.toUpperCase() === "ASC" ? "ASC" : "DESC";
+    qb.orderBy(`product.${sortBy}`, order);
 
-    if (options.page && options.limit) {
-      const skip = (options.page - 1) * options.limit;
-      qb.skip(skip).take(options.limit);
-    }
+    const skip = (page - 1) * limit;
+    qb.skip(skip).take(limit);
 
-    const products = await qb.getMany();
-    return products;
+    const [data, total] = await qb.getManyAndCount();
+
+    return {
+      data,
+      total,
+      page: Number(page),
+      limit: Number(limit),
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   // ------------------------------------------------------------------
-  // Stock management
+  // Stock management (with optional transaction)
   // ------------------------------------------------------------------
 
-  /**
-   * Increase stock
-   * @param {number} id
-   * @param {number} quantity
-   * @param {string} user
-   */
-  async addStock(id, quantity, user = 'system') {
-    if (quantity <= 0) throw new Error('Quantity must be positive');
-    return await this._adjustStock(id, quantity, user);
+  async addStock(id, quantity, user, queryRunner = null) {
+    if (quantity <= 0) throw new Error("Quantity must be positive");
+    return await this._adjustStock(id, quantity, user, queryRunner);
   }
 
-  /**
-   * Decrease stock (sell / use)
-   * @param {number} id
-   * @param {number} quantity
-   * @param {string} user
-   */
-  async removeStock(id, quantity, user = 'system') {
-    if (quantity <= 0) throw new Error('Quantity must be positive');
-    return await this._adjustStock(id, -quantity, user);
+  async removeStock(id, quantity, user, queryRunner = null) {
+    if (quantity <= 0) throw new Error("Quantity must be positive");
+    return await this._adjustStock(id, -quantity, user, queryRunner);
   }
 
-  /**
-   * Get products that have low stock (stock <= reorder_level) and are active
-   */
   async getLowStockProducts() {
-    const { product: repo } = await this.getRepositories();
-    return await repo.find({
-      where: {
-        is_deleted: false,
-        is_active: true,
-        stock: { $le: 'reorder_level' }, // This might need QueryBuilder for cross-column comparison
-      },
-    });
-    // Better with QueryBuilder for cross-column comparison:
-    // const qb = repo.createQueryBuilder('product')
-    //   .where('product.is_deleted = false')
-    //   .andWhere('product.is_active = true')
-    //   .andWhere('product.stock <= product.reorder_level');
-    // return await qb.getMany();
+    const repo = await this._getRepository();
+    const qb = repo
+      .createQueryBuilder("product")
+      .where("product.is_deleted = false")
+      .andWhere("product.is_active = true")
+      .andWhere("product.stock <= product.reorder_level");
+    return await qb.getMany();
   }
 
   // ------------------------------------------------------------------
@@ -251,48 +269,43 @@ class ProductService {
   // ------------------------------------------------------------------
 
   async getStatistics() {
-    const { product: repo } = await this.getRepositories();
+    const repo = await this._getRepository();
+    const totalActive = await repo.count({
+      where: { is_deleted: false, is_active: true },
+    });
+    const totalInactive = await repo.count({
+      where: { is_deleted: false, is_active: false },
+    });
 
-    try {
-      const totalActive = await repo.count({ where: { is_deleted: false, is_active: true } });
-      const totalInactive = await repo.count({ where: { is_deleted: false, is_active: false } });
+    const totalValueResult = await repo
+      .createQueryBuilder("product")
+      .select("SUM(product.stock * product.price)", "totalValue")
+      .where("product.is_deleted = false")
+      .getRawOne();
+    const totalStockValue = parseFloat(totalValueResult?.totalValue) || 0;
 
-      // Total stock value (sum of stock * price)
-      const totalValueResult = await repo
-        .createQueryBuilder('product')
-        .select('SUM(product.stock * product.price)', 'totalValue')
-        .where('product.is_deleted = false')
-        .getRawOne();
-      const totalStockValue = parseFloat(totalValueResult?.totalValue) || 0;
+    const avgPriceResult = await repo
+      .createQueryBuilder("product")
+      .select("AVG(product.price)", "averagePrice")
+      .where("product.is_deleted = false")
+      .andWhere("product.is_active = true")
+      .getRawOne();
+    const averagePrice = parseFloat(avgPriceResult?.averagePrice) || 0;
 
-      // Average price of active products
-      const avgPriceResult = await repo
-        .createQueryBuilder('product')
-        .select('AVG(product.price)', 'averagePrice')
-        .where('product.is_deleted = false')
-        .andWhere('product.is_active = true')
-        .getRawOne();
-      const averagePrice = parseFloat(avgPriceResult?.averagePrice) || 0;
+    const lowStockCount = await repo
+      .createQueryBuilder("product")
+      .where("product.is_deleted = false")
+      .andWhere("product.is_active = true")
+      .andWhere("product.stock <= product.reorder_level")
+      .getCount();
 
-      // Count low stock products (stock <= reorder_level and active)
-      const lowStockCount = await repo
-        .createQueryBuilder('product')
-        .where('product.is_deleted = false')
-        .andWhere('product.is_active = true')
-        .andWhere('product.stock <= product.reorder_level')
-        .getCount();
-
-      return {
-        totalActive,
-        totalInactive,
-        totalStockValue,
-        averagePrice,
-        lowStockCount,
-      };
-    } catch (error) {
-      console.error('Failed to get product statistics:', error);
-      throw error;
-    }
+    return {
+      totalActive,
+      totalInactive,
+      totalStockValue,
+      averagePrice,
+      lowStockCount,
+    };
   }
 }
 

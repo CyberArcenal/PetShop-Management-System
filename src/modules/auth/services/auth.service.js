@@ -1,24 +1,19 @@
-//@ts-check
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt');
-const crypto = require('crypto');
+const jwt = require("jsonwebtoken");
+const bcrypt = require("bcrypt");
+const crypto = require("crypto");
 
 class AuthService {
   constructor() {
     this.userService = null;
-    this.refreshTokens = new Map(); // In-memory store; replace with DB table later
+    this.refreshTokens = new Map();
   }
 
   async initialize() {
-    const userService = require('./user.service');
+    const userService = require("./user.service");
     this.userService = userService;
     await this.userService.initialize();
-    console.log('AuthService initialized');
+    console.log("AuthService initialized");
   }
-
-  // ------------------------------------------------------------------
-  // Helpers
-  // ------------------------------------------------------------------
 
   _generateAccessToken(user) {
     const payload = {
@@ -27,24 +22,22 @@ class AuthService {
       email: user.email,
       role: user.role,
     };
-    const secret = process.env.JWT_SECRET || 'dev_secret_change_me';
-    const expiresIn = process.env.JWT_EXPIRES_IN || '1d';
+    const secret = process.env.JWT_SECRET || "dev_secret_change_me";
+    const expiresIn = process.env.JWT_EXPIRES_IN || "1d";
     return jwt.sign(payload, secret, { expiresIn });
   }
 
   _generateRefreshToken() {
-    return crypto.randomBytes(40).toString('hex');
+    return crypto.randomBytes(40).toString("hex");
   }
 
   _storeRefreshToken(userId, token) {
     this.refreshTokens.set(token, { userId, createdAt: Date.now() });
-    // In production: save to database with expiry
   }
 
   _validateRefreshToken(token) {
     const record = this.refreshTokens.get(token);
     if (!record) return null;
-    // Optionally check expiry (e.g., 7 days)
     if (Date.now() - record.createdAt > 7 * 24 * 60 * 60 * 1000) {
       this.refreshTokens.delete(token);
       return null;
@@ -57,97 +50,86 @@ class AuthService {
   }
 
   // ------------------------------------------------------------------
-  // Public methods
+  // Public methods (with optional transaction support)
   // ------------------------------------------------------------------
 
   /**
-   * Register a new user (creates user account automatically)
+   * Register a new user
    * @param {Object} data
+   * @param {Object} user - the acting user (may be system)
+   * @param {Object} queryRunner - optional transaction runner
    */
-  async register(data) {
-    // Use userService.create
-    const user = await this.userService.create(data, 'system');
-    const accessToken = this._generateAccessToken(user);
+  async register(data, user = { id: "system" }, queryRunner = null) {
+    const createdUser = await this.userService.create(data, user, queryRunner);
+    const accessToken = this._generateAccessToken(createdUser);
     const refreshToken = this._generateRefreshToken();
-    this._storeRefreshToken(user.id, refreshToken);
-    return { user, accessToken, refreshToken };
+    this._storeRefreshToken(createdUser.id, refreshToken);
+    return { user: createdUser, accessToken, refreshToken };
   }
 
   /**
    * Login user
-   * @param {string} identifier - username or email
+   * @param {string} identifier
    * @param {string} password
    */
   async login(identifier, password) {
     if (!this.userService) await this.initialize();
 
-    const user = await this.userService.findByIdentifier(identifier);
-    if (!user) throw new Error('Invalid credentials');
-    if (!user.is_active) throw new Error('Account is disabled');
+    const fullUser = await this.userService.findByIdentifier(identifier);
+    if (!fullUser) throw new Error("Invalid credentials");
+    if (!fullUser.is_active) throw new Error("Account is disabled");
 
-    const isValid = await bcrypt.compare(password, user.password_hash);
-    if (!isValid) throw new Error('Invalid credentials');
+    const isValid = await bcrypt.compare(password, fullUser.password_hash);
+    if (!isValid) throw new Error("Invalid credentials");
 
-    // Update last login time (optional)
-    await this.userService.update(user.id, { lastLoginAt: new Date() }, 'system');
+    // Update last login (no transaction needed for simple update, but we can still use user object)
+    const { password_hash, ...safeUser } = fullUser;
+    await this.userService.update(
+      fullUser.id,
+      { lastLoginAt: new Date() },
+      safeUser
+    );
 
-    const { password_hash, ...safeUser } = user;
     const accessToken = this._generateAccessToken(safeUser);
     const refreshToken = this._generateRefreshToken();
-    this._storeRefreshToken(user.id, refreshToken);
+    this._storeRefreshToken(fullUser.id, refreshToken);
     return { user: safeUser, accessToken, refreshToken };
   }
 
-  /**
-   * Refresh access token using refresh token
-   * @param {string} refreshToken
-   */
   async refreshToken(refreshToken) {
     const userId = this._validateRefreshToken(refreshToken);
-    if (!userId) throw new Error('Invalid or expired refresh token');
+    if (!userId) throw new Error("Invalid or expired refresh token");
 
     const user = await this.userService.findById(userId);
-    if (!user) throw new Error('User not found');
-    if (!user.is_active) throw new Error('Account is disabled');
+    if (!user) throw new Error("User not found");
+    if (!user.is_active) throw new Error("Account is disabled");
 
     const newAccessToken = this._generateAccessToken(user);
-    // Optionally rotate refresh token (issue new one, revoke old)
     const newRefreshToken = this._generateRefreshToken();
     this._revokeRefreshToken(refreshToken);
     this._storeRefreshToken(userId, newRefreshToken);
-
     return { accessToken: newAccessToken, refreshToken: newRefreshToken };
   }
 
-  /**
-   * Logout – revoke refresh token
-   * @param {string} refreshToken
-   */
   async logout(refreshToken) {
-    if (refreshToken) {
-      this._revokeRefreshToken(refreshToken);
-    }
+    if (refreshToken) this._revokeRefreshToken(refreshToken);
     return { success: true };
   }
 
-  /**
-   * Change password
-   * @param {number} userId
-   * @param {string} oldPassword
-   * @param {string} newPassword
-   */
-  async changePassword(userId, oldPassword, newPassword) {
-    const user = await this.userService.findByIdentifier(userId); // need method to get user with hash
-    // We'll retrieve full user including password_hash
-    const { user: repo } = await this.userService.getRepositories();
+  async changePassword(userId, oldPassword, newPassword, currentUser) {
+    // Get full user with password hash
+    const repo = (await this.userService.getRepositories()).user;
     const fullUser = await repo.findOne({ where: { id: userId } });
-    if (!fullUser) throw new Error('User not found');
+    if (!fullUser) throw new Error("User not found");
 
     const isValid = await bcrypt.compare(oldPassword, fullUser.password_hash);
-    if (!isValid) throw new Error('Current password is incorrect');
+    if (!isValid) throw new Error("Current password is incorrect");
 
-    const hashed = await bcrypt.hash(newPassword, 10);
-    await this.userService.update(userId, { password: newPassword }, 'system'); // userService.update handles hashing
+    await this.userService.update(
+      userId,
+      { password: newPassword },
+      currentUser
+    );
     return { success: true };
   }
 }

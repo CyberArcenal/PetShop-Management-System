@@ -1,4 +1,4 @@
-//@ts-check
+
 const { AppDataSource } = require('../../../db/datasource');
 
 class ClientService {
@@ -18,6 +18,34 @@ class ClientService {
     return { client: this.clientRepo };
   }
 
+  async _getRepository(queryRunner = null) {
+    if (queryRunner) {
+      const { ClientEntity } = require('../entities/client.entity');
+      return queryRunner.manager.getRepository(ClientEntity);
+    }
+    return (await this.getRepositories()).client;
+  }
+
+  async _save(repo, entity, queryRunner = null, currentUser=null) {
+    const { saveDb } = require("../../../common/utils/dbUtils/dbActions");
+    if (queryRunner) {
+      
+      return await saveDb(queryRunner.manager, entity, {user: currentUser});
+      // return await queryRunner.manager.save(entity);
+    }
+    return await saveDb(repo, entity, {user: currentUser});
+  }
+
+  async _update(repo, entity, queryRunner = null, currentUser=null) {
+    const { updateDb } = require("../../../common/utils/dbUtils/dbActions");
+    if (queryRunner) {
+      
+      return await updateDb(queryRunner.manager, entity, {user: currentUser});
+      // return await queryRunner.manager.save(entity);
+    }
+    return await updateDb(repo, entity, {user: currentUser});
+  }
+
   // ------------------------------------------------------------------
   // CRUD
   // ------------------------------------------------------------------
@@ -25,100 +53,82 @@ class ClientService {
   /**
    * Create a new client
    * @param {Object} data
-   * @param {string} user
+   * @param {Object} user - { id, ... } from JWT
+   * @param {Object} queryRunner - optional transaction runner
    */
-  async create(data, user = 'system') {
-    const { saveDb } = require('../../../common/utils/dbUtils/dbActions');
+  async create(data, user, queryRunner = null) {
     const auditLogger = require('../../../common/utils/auditLogger');
-    const { client: repo } = await this.getRepositories();
+    const repo = await this._getRepository(queryRunner);
 
-    try {
-      if (!data.name) throw new Error('Client name is required');
-      if (!data.email) throw new Error('Email is required');
+    if (!data.name) throw new Error('Client name is required');
+    if (!data.email) throw new Error('Email is required');
 
-      // Check unique email
-      const existing = await repo.findOne({ where: { email: data.email } });
-      if (existing) throw new Error(`Email "${data.email}" is already used`);
+    const existing = await repo.findOne({ where: { email: data.email } });
+    if (existing) throw new Error(`Email "${data.email}" is already used`);
 
-      const client = repo.create({
-        name: data.name,
-        email: data.email,
-        phone: data.phone || null,
-        address: data.address || null,
-      });
+    const client = repo.create({
+      name: data.name,
+      email: data.email,
+      phone: data.phone || null,
+      address: data.address || null,
+    });
 
-      const saved = await saveDb(repo, client);
-      await auditLogger.logCreate('Client', saved.id, saved, user);
-      return saved;
-    } catch (error) {
-      console.error('Failed to create client:', error.message);
-      throw error;
-    }
+    const saved = await this._save(repo, client, queryRunner, user);
+    await auditLogger.logCreate('Client', saved.id, saved, user.id);
+    return saved;
   }
 
   /**
    * Update a client
    * @param {number} id
    * @param {Object} data
-   * @param {string} user
+   * @param {Object} user
+   * @param {Object} queryRunner
    */
-  async update(id, data, user = 'system') {
-    const { updateDb } = require('../../../common/utils/dbUtils/dbActions');
+  async update(id, data, user, queryRunner = null) {
     const auditLogger = require('../../../common/utils/auditLogger');
-    const { client: repo } = await this.getRepositories();
+    const repo = await this._getRepository(queryRunner);
 
-    try {
-      const existing = await repo.findOne({ where: { id, is_deleted: false } });
-      if (!existing) throw new Error(`Client with ID ${id} not found`);
-      const oldData = { ...existing };
+    const existing = await repo.findOne({ where: { id, is_deleted: false } });
+    if (!existing) throw new Error(`Client with ID ${id} not found`);
+    const oldData = { ...existing };
 
-      // Check email uniqueness if changed
-      if (data.email && data.email !== existing.email) {
-        const emailExists = await repo.findOne({ where: { email: data.email } });
-        if (emailExists) throw new Error(`Email "${data.email}" is already used`);
-      }
-
-      // Apply updates
-      if (data.name !== undefined) existing.name = data.name;
-      if (data.email !== undefined) existing.email = data.email;
-      if (data.phone !== undefined) existing.phone = data.phone;
-      if (data.address !== undefined) existing.address = data.address;
-
-      const updated = await updateDb(repo, existing);
-      await auditLogger.logUpdate('Client', id, oldData, updated, user);
-      return updated;
-    } catch (error) {
-      console.error('Failed to update client:', error.message);
-      throw error;
+    if (data.email && data.email !== existing.email) {
+      const emailExists = await repo.findOne({ where: { email: data.email } });
+      if (emailExists) throw new Error(`Email "${data.email}" is already used`);
     }
+
+    if (data.name !== undefined) existing.name = data.name;
+    if (data.email !== undefined) existing.email = data.email;
+    if (data.phone !== undefined) existing.phone = data.phone;
+    if (data.address !== undefined) existing.address = data.address;
+
+    const updated = await this._update(repo, existing, queryRunner, user);
+    await auditLogger.logUpdate('Client', id, oldData, updated, user.id);
+    return updated;
   }
 
   /**
    * Soft delete a client
    * @param {number} id
-   * @param {string} user
+   * @param {Object} user
+   * @param {Object} queryRunner
    */
-  async delete(id, user = 'system') {
-    const { updateDb } = require('../../../common/utils/dbUtils/dbActions');
+  async delete(id, user, queryRunner = null) {
     const auditLogger = require('../../../common/utils/auditLogger');
-    const { client: repo } = await this.getRepositories();
+    const repo = await this._getRepository(queryRunner);
 
-    try {
-      const client = await repo.findOne({ where: { id, is_deleted: false } });
-      if (!client) throw new Error(`Client with ID ${id} not found`);
-      if (client.is_deleted) throw new Error(`Client #${id} is already deleted`);
+    const client = await repo.findOne({ where: { id, is_deleted: false } });
+    if (!client) throw new Error(`Client with ID ${id} not found`);
+    if (client.is_deleted) throw new Error(`Client #${id} is already deleted`);
 
-      const oldData = { ...client };
-      client.is_deleted = true;
-      client.updated_at = new Date();
+    const oldData = { ...client };
+    client.is_deleted = true;
+    client.updated_at = new Date();
 
-      const updated = await updateDb(repo, client);
-      await auditLogger.logDelete('Client', id, oldData, user);
-      return updated;
-    } catch (error) {
-      console.error('Failed to delete client:', error.message);
-      throw error;
-    }
+    const updated = await this._update(repo, client, queryRunner, user);
+    await auditLogger.logDelete('Client', id, oldData, user.id);
+    return updated;
   }
 
   /**
@@ -126,16 +136,10 @@ class ClientService {
    * @param {number} id
    */
   async findById(id) {
-    const { client: repo } = await this.getRepositories();
-
-    try {
-      const client = await repo.findOne({ where: { id, is_deleted: false } });
-      if (!client) throw new Error(`Client with ID ${id} not found`);
-      return client;
-    } catch (error) {
-      console.error('Failed to find client:', error.message);
-      throw error;
-    }
+    const repo = await this._getRepository();
+    const client = await repo.findOne({ where: { id, is_deleted: false } });
+    if (!client) throw new Error(`Client with ID ${id} not found`);
+    return client;
   }
 
   /**
@@ -148,44 +152,48 @@ class ClientService {
    * @param {string} [options.sortOrder]
    */
   async findAll(options = {}) {
-    const { client: repo } = await this.getRepositories();
+    const repo = await this._getRepository();
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      sortBy = 'created_at',
+      sortOrder = 'DESC',
+    } = options;
 
     const qb = repo.createQueryBuilder('client').where('client.is_deleted = false');
 
-    if (options.search) {
+    if (search) {
       qb.andWhere(
         '(client.name LIKE :search OR client.email LIKE :search OR client.phone LIKE :search)',
-        { search: `%${options.search}%` }
+        { search: `%${search}%` }
       );
     }
 
-    const sortBy = options.sortBy || 'created_at';
-    const sortOrder = options.sortOrder === 'ASC' ? 'ASC' : 'DESC';
-    qb.orderBy(`client.${sortBy}`, sortOrder);
+    const order = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+    qb.orderBy(`client.${sortBy}`, order);
 
-    if (options.page && options.limit) {
-      const skip = (options.page - 1) * options.limit;
-      qb.skip(skip).take(options.limit);
-    }
+    const skip = (page - 1) * limit;
+    qb.skip(skip).take(limit);
 
-    const clients = await qb.getMany();
-    return clients;
+    const [data, total] = await qb.getManyAndCount();
+
+    return {
+      data,
+      total,
+      page: Number(page),
+      limit: Number(limit),
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   /**
    * Get client statistics
    */
   async getStatistics() {
-    const { client: repo } = await this.getRepositories();
-
-    try {
-      const total = await repo.count({ where: { is_deleted: false } });
-      // You could add more stats later, like clients with pets, etc.
-      return { total };
-    } catch (error) {
-      console.error('Failed to get client statistics:', error);
-      throw error;
-    }
+    const repo = await this._getRepository();
+    const total = await repo.count({ where: { is_deleted: false } });
+    return { total };
   }
 }
 

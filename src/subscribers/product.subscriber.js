@@ -1,4 +1,4 @@
-//@ts-check
+
 
 const { logger } = require("../common/utils/logger");
 const { ProductStateTransition } = require("../stateTransitionServices/product.state");
@@ -12,10 +12,16 @@ class ProductSubscriber {
     return 'Product'; // entity name from EntitySchema
   }
 
+  /**
+   * @param {{ id: any; }} entity
+   */
   async beforeInsert(entity) {
     logger.debug('[ProductSubscriber] beforeInsert', { id: entity.id });
   }
 
+  /**
+   * @param {Object} entity
+   */
   async afterInsert(entity) {
     logger.info('[ProductSubscriber] afterInsert', { id: entity.id, name: entity.name });
     await this.stateTransition.onCreated(entity);
@@ -27,6 +33,7 @@ class ProductSubscriber {
 
     const oldProduct = event.databaseEntity;
     const newProduct = event.entity;
+    const user = event.user
 
     if (!oldProduct) return;
 
@@ -63,10 +70,16 @@ class ProductSubscriber {
     // Not triggering separate events unless needed.
   }
 
+  /**
+   * @param {{ id: any; }} entity
+   */
   async beforeRemove(entity) {
     logger.info('[ProductSubscriber] beforeRemove (hard delete)', { id: entity.id });
   }
 
+  /**
+   * @param {{ entityId: any; }} event
+   */
   async afterRemove(event) {
     logger.info('[ProductSubscriber] afterRemove (hard delete)', { id: event.entityId });
   }

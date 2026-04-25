@@ -1,4 +1,4 @@
-//@ts-check
+
 
 const { logger } = require("../common/utils/logger");
 const { SaleItemStateTransition } = require("../stateTransitionServices/saleitem.state");
@@ -12,15 +12,22 @@ class SaleItemSubscriber {
     return 'SaleItem';
   }
 
+  /**
+   * @param {{ id: any; }} entity
+   */
   async afterInsert(entity) {
     logger.info('[SaleItemSubscriber] afterInsert', { id: entity.id });
     await this.stateTransition.onAdded(entity);
   }
 
+  /**
+   * @param {{ entity: any; databaseEntity: any; user: any; }} event
+   */
   async afterUpdate(event) {
     if (!event.entity) return;
     const oldItem = event.databaseEntity;
     const newItem = event.entity;
+    const user = event.user
     if (!oldItem) return;
 
     // Soft delete detection (is_deleted becomes true)

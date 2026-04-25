@@ -1,4 +1,3 @@
-//@ts-check
 
 const { logger } = require("../common/utils/logger");
 const { SaleStateTransition } = require("../stateTransitionServices/sale.state");
@@ -12,24 +11,36 @@ class SaleSubscriber {
     return 'Sale'; // must match the entity name from your SaleEntity
   }
 
+  /**
+   * @param {{ id: any; }} entity
+   */
   async beforeInsert(entity) {
     logger.debug('[SaleSubscriber] beforeInsert', { id: entity.id });
   }
 
+  /**
+   * @param {{ id: any; }} entity
+   */
   async afterInsert(entity) {
     logger.info('[SaleSubscriber] afterInsert', { id: entity.id });
   }
 
+  /**
+   * @param {any} entity
+   */
   async beforeUpdate(entity) {
     // optional
   }
 
-  /** @param {{ databaseEntity?: any; entity: any }} event */
+  /**
+   * @param {{ entity: any; databaseEntity: any; user: any; }} event
+   */
   async afterUpdate(event) {
     if (!event.entity) return;
 
     const oldSale = event.databaseEntity;
     const newSale = event.entity;
+    const user = event.user
 
     if (!oldSale) return;
 
@@ -57,10 +68,16 @@ class SaleSubscriber {
     }
   }
 
+  /**
+   * @param {{ id: any; }} entity
+   */
   async beforeRemove(entity) {
     logger.info('[SaleSubscriber] beforeRemove (hard delete)', { id: entity.id });
   }
 
+  /**
+   * @param {{ entityId: any; }} event
+   */
   async afterRemove(event) {
     logger.info('[SaleSubscriber] afterRemove (hard delete)', { id: event.entityId });
   }

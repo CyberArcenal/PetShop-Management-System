@@ -37,16 +37,17 @@ function findSubscriber(entityClass) {
 async function saveDb(repo, entity, options = {}) {
   try {
     const subscriber = findSubscriber(repo.target);
-    const { skipSignal = false } = options;
+    // @ts-ignore
+    const { skipSignal = false, user = null } = options;
 
     if (!skipSignal && subscriber?.beforeInsert) {
-      await subscriber.beforeInsert(entity);
+      await subscriber.beforeInsert(entity, user);
     }
 
     const result = await repo.save(entity);
 
     if (!skipSignal && subscriber?.afterInsert) {
-      await subscriber.afterInsert(result);
+      await subscriber.afterInsert(result, user);
     }
 
     return result;
@@ -83,20 +84,21 @@ async function updateDb(repo, entity, options = {}) {
   let oldEntity = null;
   try {
     const subscriber = findSubscriber(repo.target);
-    const { skipSignal = false } = options;
+    // @ts-ignore
+    const { skipSignal = false, user = null } = options;
 
     // Fetch old snapshot from DB for internal use
     // @ts-ignore
     oldEntity = await repo.findOne({ where: { id: entity.id } });
 
     if (!skipSignal && subscriber?.beforeUpdate) {
-      await subscriber.beforeUpdate(entity);
+      await subscriber.beforeUpdate(entity, user);
     }
 
     const result = await repo.save(entity);
 
     if (!skipSignal && subscriber?.afterUpdate) {
-      await subscriber.afterUpdate({ databaseEntity: oldEntity, entity: result });
+      await subscriber.afterUpdate({ databaseEntity: oldEntity, entity: result , user});
     }
 
     return result;
@@ -137,10 +139,11 @@ async function removeDb(repo, entity, options = {}) {
   let oldEntity = null;
   try {
     const subscriber = findSubscriber(repo.target);
-    const { skipSignal = false } = options;
+    // @ts-ignore
+    const { skipSignal = false, user = null } = options;
 
     if (!skipSignal && subscriber?.beforeRemove) {
-      await subscriber.beforeRemove(entity);
+      await subscriber.beforeRemove(entity, user);
     }
 
     // @ts-ignore
@@ -150,7 +153,7 @@ async function removeDb(repo, entity, options = {}) {
 
     if (!skipSignal && subscriber?.afterRemove) {
       // @ts-ignore
-      await subscriber.afterRemove({ databaseEntity: oldEntity, entityId: result.id });
+      await subscriber.afterRemove({ databaseEntity: oldEntity, entityId: result.id, user });
     }
 
     return result;

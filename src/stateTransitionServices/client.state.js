@@ -1,4 +1,4 @@
-//@ts-check
+
 
 const { logger } = require("../common/utils/logger");
 
@@ -6,9 +6,9 @@ class ClientStateTransition {
   /**
    * Called after a client is created
    * @param {Object} client
-   * @param {string} actor
+   * @param {any} user
    */
-  async onCreated(client, actor = 'system') {
+  async onCreated(client, user = null) {
     logger.info(`[ClientState] Client created: ${client.id} (${client.name}, ${client.email})`);
     // Example: send welcome email
     // await emailService.sendWelcome(client.email, client.name);
@@ -18,9 +18,9 @@ class ClientStateTransition {
    * Called after a client is updated
    * @param {Object} client
    * @param {Object} oldData
-   * @param {string} actor
+   * @param {any} user
    */
-  async onUpdated(client, oldData, actor = 'system') {
+  async onUpdated(client, oldData, user = null) {
     logger.info(`[ClientState] Client updated: ${client.id} (${client.name})`);
     // Example: sync with CRM
   }
@@ -28,9 +28,9 @@ class ClientStateTransition {
   /**
    * Called after a client is soft-deleted
    * @param {Object} client
-   * @param {string} actor
+   * @param {any} user
    */
-  async onDeleted(client, actor = 'system') {
+  async onDeleted(client, user = null) {
     logger.info(`[ClientState] Client deleted: ${client.id} (${client.name})`);
     // Example: anonymise data, cancel upcoming appointments
   }
