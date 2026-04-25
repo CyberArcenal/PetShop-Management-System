@@ -209,7 +209,7 @@ This project is licensed under the **GNU General Public License v3.0** – see t
 
 ## 📬 Contact
 
-**Darius** – [cyberarcenal1@gmail.com](mailto:cyberarcenal1@gmail.com)  
+**CyberArcenal** – [cyberarcenal1@gmail.com](mailto:cyberarcenal1@gmail.com)  
 Project Link: [https://github.com/CyberArcenal/PETSHOP-MANAGEMENT-SYSTEM](https://github.com/CyberArcenal/PETSHOP-MANAGEMENT-SYSTEM)
 
 ---
